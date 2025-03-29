@@ -1,10 +1,6 @@
-package com.bitget.order.oderbook.optimistic;
+package com.bitget.order.oderbook.optimistic.partitioned;
 
 
-
-
-// =====================
-// 4. JUnit 多线程性能测试代码（使用 Disruptor 多工作线程并发处理订单事件）
 
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
@@ -19,13 +15,14 @@ import java.util.concurrent.Executors;
 
 import static org.junit.Assert.assertTrue;
 
-public class BacklogOrdersConcurrentOptimisticTest {
 
+// 5. JUnit 多线程性能测试代码（分区版本）
+public class BacklogOrdersConcurrentOptimisticPartitionedTest {
     public static final int MOD = 1_000_000_007;
     public static final int PRICE_BASE = 1_000_000_000;
 
     @Test
-    public void testConcurrentOptimisticPerformance() throws Exception {
+    public void testConcurrentOptimisticPartitionedPerformance() throws Exception {
         int orderCount = 1_000_000;
         int[][] orders = new int[orderCount][3];
         Random rand = new Random(42);
@@ -38,7 +35,10 @@ public class BacklogOrdersConcurrentOptimisticTest {
             orders[i][2] = type;
         }
 
-        ConcurrentOrderBookOptimistic orderBook = new ConcurrentOrderBookOptimistic();
+        // 分区数，根据机器核数合理选择（比如 16 个分区）
+        int partitions = 16;
+        PartitionedConcurrentOrderBookOptimistic partitionedBook =
+                new PartitionedConcurrentOrderBookOptimistic(partitions);
 
         int bufferSize = 1 << 16; // 65536
         Disruptor<OrderEvent> disruptor = new Disruptor<>(
@@ -49,9 +49,9 @@ public class BacklogOrdersConcurrentOptimisticTest {
                 new com.lmax.disruptor.YieldingWaitStrategy()
         );
         int numWorkers = 4;
-        OrderWorkerOptimistic[] workers = new OrderWorkerOptimistic[numWorkers];
+        OrderWorkerOptimisticPartitioned[] workers = new OrderWorkerOptimisticPartitioned[numWorkers];
         for (int i = 0; i < numWorkers; i++) {
-            workers[i] = new OrderWorkerOptimistic(orderBook);
+            workers[i] = new OrderWorkerOptimisticPartitioned(partitionedBook);
         }
         disruptor.handleEventsWithWorkerPool(workers);
         disruptor.start();
@@ -83,34 +83,14 @@ public class BacklogOrdersConcurrentOptimisticTest {
         long endTime = System.nanoTime();
         long elapsedMs = (endTime - startTime) / 1_000_000;
 
-        long total = 0;
-        for (OrderDisruptorQueue queue : orderBook.getBuyTree().values()) {
-            for (Order o : queue.toList()) {
-                total = (total + o.amount) % MOD;
-            }
-        }
-        for (OrderDisruptorQueue queue : orderBook.getSellTree().values()) {
-            for (Order o : queue.toList()) {
-                total = (total + o.amount) % MOD;
-            }
-        }
-        System.out.println("Processed " + orderCount + " orders concurrently (optimistic) in " + elapsedMs + " ms");
+        long total = partitionedBook.getBacklogCount();
+        System.out.println("Processed " + orderCount + " orders concurrently (partitioned optimistic) in " + elapsedMs + " ms");
         System.out.println("Total backlog orders count: " + total);
         System.out.println("Sample match log entries (first 10):");
         /*int cnt = 0;
-        for (String log : orderBook.getMatchLog()) {
+        for (String log : partitionedBook.getMatchLogs()) {
             System.out.println(log);
             if (++cnt >= 10) break;
-        }
-        System.out.println("\nFinal Buy Orders:");
-        for (Map.Entry<String, OrderDisruptorQueue> entry : orderBook.getBuyTree().entrySet()) {
-            int actualPrice = PRICE_BASE - Integer.parseInt(entry.getKey());
-            System.out.println("Price " + actualPrice + " -> " + entry.getValue());
-        }
-        System.out.println("\nFinal Sell Orders:");
-        for (Map.Entry<String, OrderDisruptorQueue> entry : orderBook.getSellTree().entrySet()) {
-            int price = Integer.parseInt(entry.getKey());
-            System.out.println("Price " + price + " -> " + entry.getValue());
         }
         assertTrue("Backlog count should be non-negative", total >= 0);*/
     }

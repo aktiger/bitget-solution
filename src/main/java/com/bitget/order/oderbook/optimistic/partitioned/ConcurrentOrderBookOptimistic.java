@@ -1,4 +1,4 @@
-package com.bitget.order.oderbook.optimistic;
+package com.bitget.order.oderbook.optimistic.partitioned;
 
 import com.github.rohansuri.art.AdaptiveRadixTree;
 import com.github.rohansuri.art.BinaryComparables;
@@ -18,7 +18,7 @@ class Order {
     int price;
     int amount;
     int time;
-    int type; // 0: 买单, 1: 卖单
+    int type; // 0: Buy, 1: Sell
 
     public Order(int price, int amount, int time, int type) {
         this.price = price;
@@ -46,7 +46,7 @@ class OrderEventFactory implements EventFactory<OrderEvent> {
 }
 
 /**
- * OrderDisruptorQueue：基于 LMAX Disruptor 的简单 FIFO 队列
+ * OrderDisruptorQueue：基于 LMAX Disruptor 的简单 FIFO 队列实现
  */
 class OrderDisruptorQueue {
     private static final int BUFFER_SIZE = 4096;
@@ -110,24 +110,23 @@ class OrderDisruptorQueue {
 }
 
 // =====================
-// 2. 共享订单簿（采用 StampedLock 乐观锁方案，带有异常捕获和降级到读锁）
+// 2. 原始乐观订单簿（ConcurrentOrderBookOptimistic），与之前类似
 
 public class ConcurrentOrderBookOptimistic {
     // 与之前保持一致的转换常量
     public static final int MOD = 1_000_000_007;
     public static final int PRICE_BASE = 1_000_000_000;
-    // ART 实现的 NavigableMap，key 为经过转换的固定宽度字符串，值为 OrderDisruptorQueue
+    // ART 实现的 NavigableMap，键为经过转换的固定宽度字符串，值为 OrderDisruptorQueue
     private final NavigableMap<String, OrderDisruptorQueue> buyTree =
             new AdaptiveRadixTree<>(BinaryComparables.forString());
     private final NavigableMap<String, OrderDisruptorQueue> sellTree =
             new AdaptiveRadixTree<>(BinaryComparables.forString());
-    // 使用 StampedLock 替代传统锁
+    // 用 StampedLock 实现乐观锁
     private final StampedLock buyLock = new StampedLock();
     private final StampedLock sellLock = new StampedLock();
-    // 用于记录匹配日志
     private final ConcurrentLinkedQueue<String> matchLog = new ConcurrentLinkedQueue<>();
 
-    // 价格转换：保证卖单key 升序，买单key 通过 PRICE_BASE - price 实现降序
+    // 价格转换函数
     private String sellKey(int price) {
         return String.format("%010d", price);
     }
@@ -135,9 +134,6 @@ public class ConcurrentOrderBookOptimistic {
         return String.format("%010d", PRICE_BASE - price);
     }
 
-    /**
-     * 处理订单，采用乐观读 + 回退到读锁方案
-     */
     public void process(Order order) {
         if (order.type == 0) { // 买单
             boolean continueMatching = true;
@@ -147,7 +143,6 @@ public class ConcurrentOrderBookOptimistic {
                 try {
                     entry = sellTree.firstEntry();
                 } catch (AssertionError ae) {
-                    // 出现异常则回退到读锁
                     stamp = sellLock.readLock();
                     try {
                         entry = sellTree.firstEntry();
@@ -166,7 +161,6 @@ public class ConcurrentOrderBookOptimistic {
                     if (!sellLock.validate(stamp)) continue;
                     break;
                 }
-                // 升级为写锁
                 stamp = sellLock.writeLock();
                 try {
                     entry = sellTree.firstEntry();
@@ -247,7 +241,7 @@ public class ConcurrentOrderBookOptimistic {
                     buyOrder = entry.getValue().peek();
                     if (buyOrder == null) continue;
                     int matchQty = Math.min(order.amount, buyOrder.amount);
-                    //matchLog.add("Match: " + buyOrder + " matched with " + order + ", quantity=" + matchQty);
+//                    matchLog.add("Match: " + buyOrder + " matched with " + order + ", quantity=" + matchQty);
                     order.amount -= matchQty;
                     buyOrder.amount -= matchQty;
                     if (buyOrder.amount == 0) {
@@ -292,11 +286,62 @@ public class ConcurrentOrderBookOptimistic {
 }
 
 // =====================
-// 3. 多线程消费者：OrderWorkerOptimistic
+// 3. 分区版本：将订单簿分区，降低不同线程间的冲突
+class PartitionedConcurrentOrderBookOptimistic {
+    private final int partitions;
+    private final ConcurrentOrderBookOptimistic[] orderBooks;
 
-class OrderWorkerOptimistic implements WorkHandler<OrderEvent> {
-    private final ConcurrentOrderBookOptimistic orderBook;
-    public OrderWorkerOptimistic(ConcurrentOrderBookOptimistic orderBook) {
+    public PartitionedConcurrentOrderBookOptimistic(int partitions) {
+        this.partitions = partitions;
+        orderBooks = new ConcurrentOrderBookOptimistic[partitions];
+        for (int i = 0; i < partitions; i++) {
+            orderBooks[i] = new ConcurrentOrderBookOptimistic();
+        }
+    }
+
+    // 简单地以价格 mod partitions 作为分区索引
+    private int getPartition(Order order) {
+        return order.price % partitions;
+    }
+
+    public void process(Order order) {
+        int idx = getPartition(order);
+        orderBooks[idx].process(order);
+    }
+
+    // 合并所有分区的匹配日志
+    public List<String> getMatchLogs() {
+        List<String> logs = new ArrayList<>();
+        for (ConcurrentOrderBookOptimistic book : orderBooks) {
+            logs.addAll(book.getMatchLog());
+        }
+        return logs;
+    }
+
+    // 合并所有分区的剩余订单数量
+    public long getBacklogCount() {
+        long total = 0;
+        for (ConcurrentOrderBookOptimistic book : orderBooks) {
+            for (OrderDisruptorQueue queue : book.getBuyTree().values()) {
+                for (Order o : queue.toList()) {
+                    total += o.amount;
+                }
+            }
+            for (OrderDisruptorQueue queue : book.getSellTree().values()) {
+                for (Order o : queue.toList()) {
+                    total += o.amount;
+                }
+            }
+        }
+        return total;
+    }
+}
+
+// =====================
+// 4. 多线程消费者：OrderWorkerOptimisticPartitioned
+class OrderWorkerOptimisticPartitioned implements WorkHandler<OrderEvent> {
+    private final PartitionedConcurrentOrderBookOptimistic orderBook;
+    public OrderWorkerOptimisticPartitioned(PartitionedConcurrentOrderBookOptimistic orderBook) {
         this.orderBook = orderBook;
     }
     @Override
@@ -304,4 +349,3 @@ class OrderWorkerOptimistic implements WorkHandler<OrderEvent> {
         orderBook.process(event.order);
     }
 }
-
