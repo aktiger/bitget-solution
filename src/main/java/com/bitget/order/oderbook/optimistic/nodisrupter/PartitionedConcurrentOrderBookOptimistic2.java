@@ -96,7 +96,7 @@ class ConcurrentOrderBookOptimisticSimple {
                     sellOrder = entry.getValue().peek();
                     if (sellOrder == null) continue;
                     int matchQty = Math.min(order.amount, sellOrder.amount);
-                    matchLog.add("Match: " + order + " matched with " + sellOrder + ", qty=" + matchQty);
+                    //matchLog.add("Match: " + order + " matched with " + sellOrder + ", qty=" + matchQty);
                     order.amount -= matchQty;
                     sellOrder.amount -= matchQty;
                     if (sellOrder.amount == 0) {
@@ -119,7 +119,7 @@ class ConcurrentOrderBookOptimisticSimple {
                         buyTree.put(key, queue);
                     }
                     queue.offer(order);
-                    matchLog.add("Buy order added: " + order);
+                    //matchLog.add("Buy order added: " + order);
                 } finally {
                     buyLock.unlockWrite(stamp);
                 }
@@ -164,7 +164,7 @@ class ConcurrentOrderBookOptimisticSimple {
                     buyOrder = entry.getValue().peek();
                     if (buyOrder == null) continue;
                     int matchQty = Math.min(order.amount, buyOrder.amount);
-                    matchLog.add("Match: " + buyOrder + " matched with " + order + ", qty=" + matchQty);
+                    //matchLog.add("Match: " + buyOrder + " matched with " + order + ", qty=" + matchQty);
                     order.amount -= matchQty;
                     buyOrder.amount -= matchQty;
                     if (buyOrder.amount == 0) {
@@ -187,7 +187,7 @@ class ConcurrentOrderBookOptimisticSimple {
                         sellTree.put(key, queue);
                     }
                     queue.offer(order);
-                    matchLog.add("Sell order added: " + order);
+                    //matchLog.add("Sell order added: " + order);
                 } finally {
                     sellLock.unlockWrite(stamp);
                 }
