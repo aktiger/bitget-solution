@@ -1,4 +1,4 @@
-package com.bitget.order.oderbook;
+package com.bitget.order.oderbook.simpleconcurrent;
 
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;

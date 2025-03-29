@@ -1,17 +1,10 @@
-package com.bitget.order.oderbook;
+package com.bitget.order.oderbook.simpleconcurrent;
 
 import com.github.rohansuri.art.AdaptiveRadixTree;
 import com.github.rohansuri.art.BinaryComparables;
-import com.lmax.disruptor.EventFactory;
-import com.lmax.disruptor.RingBuffer;
-import com.lmax.disruptor.dsl.Disruptor;
-import com.lmax.disruptor.dsl.ProducerType;
-import com.lmax.disruptor.WorkHandler;
 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
-
 
 
 // =====================

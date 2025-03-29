@@ -1,4 +1,4 @@
-package com.bitget.order.oderbook;
+package com.bitget.order.oderbook.simpleconcurrent;
 
 public class Order {
     int price;

@@ -1,4 +1,4 @@
-package com.bitget.order.oderbook;
+package com.bitget.order.oderbook.simpleconcurrent;
 
 // =====================
 // 4. JUnit 多线程性能测试
@@ -9,7 +9,6 @@ import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import org.junit.Test;
 
-import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
