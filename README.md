@@ -23,12 +23,12 @@ cd bitget-solution
 
 # Build the project using Maven
 mvn clean install
+```
 
-
-#Usage
+## Usage
 Here is an example of how to use the order book implementation in your Java application:
 
-·
+```
 package com.bitget.order.oderbook.optimistic.nodisrupter;
 
 import org.junit.Test;
@@ -99,6 +99,8 @@ public class BacklogOrdersConcurrentOptimisticPartitionedTest2 {
         assertTrue("Backlog count should be non-negative", total >= 0);*/
     }
 }
-·
+```
+
+
 
 
