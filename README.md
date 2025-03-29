@@ -101,6 +101,14 @@ public class BacklogOrdersConcurrentOptimisticPartitionedTest2 {
 }
 ```
 
+## Performance
+![Order Book](./src/test/resources/performance/perf1.png "perf1")
+![Order Book](./src/test/resources/performance/perf2.png "perf2")
+![Order Book](./src/test/resources/performance/perf3.png "perf3")
+
+## Conclusion
+The order book is a critical component of any exchange, and its performance is crucial for the overall efficiency of the platform. By using concurrent data structures and optimistic concurrency control, we can significantly improve the performance of the order book. Additionally, by partitioning the order book into multiple partitions
+
 
 
 
