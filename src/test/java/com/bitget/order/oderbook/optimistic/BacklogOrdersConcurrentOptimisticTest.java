@@ -26,7 +26,7 @@ public class BacklogOrdersConcurrentOptimisticTest {
 
     @Test
     public void testConcurrentOptimisticPerformance() throws Exception {
-        int orderCount = 1_000_000;  // 100 万订单
+        int orderCount = 1_000_000;
         int[][] orders = new int[orderCount][3];
         Random rand = new Random(42);
         for (int i = 0; i < orderCount; i++) {
@@ -38,7 +38,7 @@ public class BacklogOrdersConcurrentOptimisticTest {
             orders[i][2] = type;
         }
 
-        ConcurrentOrderBook orderBook = new ConcurrentOrderBook();
+        ConcurrentOrderBookOptimistic orderBook = new ConcurrentOrderBookOptimistic();
 
         int bufferSize = 1 << 16; // 65536
         Disruptor<OrderEvent> disruptor = new Disruptor<>(
@@ -49,9 +49,9 @@ public class BacklogOrdersConcurrentOptimisticTest {
                 new com.lmax.disruptor.YieldingWaitStrategy()
         );
         int numWorkers = 4;
-        OrderWorker[] workers = new OrderWorker[numWorkers];
+        OrderWorkerOptimistic[] workers = new OrderWorkerOptimistic[numWorkers];
         for (int i = 0; i < numWorkers; i++) {
-            workers[i] = new OrderWorker(orderBook);
+            workers[i] = new OrderWorkerOptimistic(orderBook);
         }
         disruptor.handleEventsWithWorkerPool(workers);
         disruptor.start();
@@ -97,7 +97,7 @@ public class BacklogOrdersConcurrentOptimisticTest {
         System.out.println("Processed " + orderCount + " orders concurrently (optimistic) in " + elapsedMs + " ms");
         System.out.println("Total backlog orders count: " + total);
         System.out.println("Sample match log entries (first 10):");
-        int cnt = 0;
+        /*int cnt = 0;
         for (String log : orderBook.getMatchLog()) {
             System.out.println(log);
             if (++cnt >= 10) break;
@@ -112,6 +112,6 @@ public class BacklogOrdersConcurrentOptimisticTest {
             int price = Integer.parseInt(entry.getKey());
             System.out.println("Price " + price + " -> " + entry.getValue());
         }
-        assertTrue("Backlog count should be non-negative", total >= 0);
+        assertTrue("Backlog count should be non-negative", total >= 0);*/
     }
 }

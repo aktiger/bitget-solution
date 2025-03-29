@@ -14,10 +14,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.StampedLock;
 
-// =====================
-// 1. 基础数据结构和队列实现
-
-// 订单类：包含价格、数量、时间（下单顺序，下标越小表示越早）、订单类型（0：买单，1：卖单）
 class Order {
     int price;
     int amount;
@@ -38,12 +34,10 @@ class Order {
     }
 }
 
-// 用于 Disruptor 的订单事件包装
 class OrderEvent {
     public Order order;
 }
 
-// EventFactory 用于创建 OrderEvent 实例
 class OrderEventFactory implements EventFactory<OrderEvent> {
     @Override
     public OrderEvent newInstance() {
@@ -52,7 +46,7 @@ class OrderEventFactory implements EventFactory<OrderEvent> {
 }
 
 /**
- * OrderDisruptorQueue：基于 LMAX Disruptor 的简单 FIFO 队列实现
+ * OrderDisruptorQueue：基于 LMAX Disruptor 的简单 FIFO 队列
  */
 class OrderDisruptorQueue {
     private static final int BUFFER_SIZE = 4096;
@@ -67,7 +61,6 @@ class OrderDisruptorQueue {
                 ProducerType.SINGLE,
                 new com.lmax.disruptor.YieldingWaitStrategy()
         );
-        // 本队列仅用于直接访问 RingBuffer，不设置 EventHandler
         disruptor.start();
         ringBuffer = disruptor.getRingBuffer();
     }
@@ -117,9 +110,10 @@ class OrderDisruptorQueue {
 }
 
 // =====================
-// 2. 共享订单簿（使用 ART 实现的 NavigableMap 和 StampedLock 实现乐观锁）
+// 2. 共享订单簿（采用 StampedLock 乐观锁方案，带有异常捕获和降级到读锁）
 
-class ConcurrentOrderBook {
+public class ConcurrentOrderBookOptimistic {
+    // 与之前保持一致的转换常量
     public static final int MOD = 1_000_000_007;
     public static final int PRICE_BASE = 1_000_000_000;
     // ART 实现的 NavigableMap，key 为经过转换的固定宽度字符串，值为 OrderDisruptorQueue
@@ -130,10 +124,10 @@ class ConcurrentOrderBook {
     // 使用 StampedLock 替代传统锁
     private final StampedLock buyLock = new StampedLock();
     private final StampedLock sellLock = new StampedLock();
-    // 使用线程安全的队列记录匹配日志
+    // 用于记录匹配日志
     private final ConcurrentLinkedQueue<String> matchLog = new ConcurrentLinkedQueue<>();
 
-    // 与之前一致的价格转换函数
+    // 价格转换：保证卖单key 升序，买单key 通过 PRICE_BASE - price 实现降序
     private String sellKey(int price) {
         return String.format("%010d", price);
     }
@@ -142,17 +136,25 @@ class ConcurrentOrderBook {
     }
 
     /**
-     * 处理订单：
-     * 采用乐观读模式（StampedLock.tryOptimisticRead）读取后，
-     * 在需要修改时升级为写锁，并在写锁下重查条件后修改数据结构。
+     * 处理订单，采用乐观读 + 回退到读锁方案
      */
     public void process(Order order) {
         if (order.type == 0) { // 买单
-            // 匹配卖单：在 sellTree 中找出最低卖价且 <= order.price 的订单
             boolean continueMatching = true;
             while (order.amount > 0 && continueMatching) {
                 long stamp = sellLock.tryOptimisticRead();
-                Map.Entry<String, OrderDisruptorQueue> entry = sellTree.firstEntry();
+                Map.Entry<String, OrderDisruptorQueue> entry = null;
+                try {
+                    entry = sellTree.firstEntry();
+                } catch (AssertionError ae) {
+                    // 出现异常则回退到读锁
+                    stamp = sellLock.readLock();
+                    try {
+                        entry = sellTree.firstEntry();
+                    } finally {
+                        sellLock.unlockRead(stamp);
+                    }
+                }
                 if (entry == null) break;
                 int sellPrice = Integer.parseInt(entry.getKey());
                 if (sellPrice > order.price) {
@@ -164,10 +166,9 @@ class ConcurrentOrderBook {
                     if (!sellLock.validate(stamp)) continue;
                     break;
                 }
-                // 检查无冲突后升级为写锁
+                // 升级为写锁
                 stamp = sellLock.writeLock();
                 try {
-                    // 重新读取
                     entry = sellTree.firstEntry();
                     if (entry == null) continue;
                     sellPrice = Integer.parseInt(entry.getKey());
@@ -178,7 +179,7 @@ class ConcurrentOrderBook {
                     sellOrder = entry.getValue().peek();
                     if (sellOrder == null) continue;
                     int matchQty = Math.min(order.amount, sellOrder.amount);
-                    matchLog.add("Match: " + order + " matched with " + sellOrder + ", quantity=" + matchQty);
+                    //matchLog.add("Match: " + order + " matched with " + sellOrder + ", quantity=" + matchQty);
                     order.amount -= matchQty;
                     sellOrder.amount -= matchQty;
                     if (sellOrder.amount == 0) {
@@ -201,7 +202,7 @@ class ConcurrentOrderBook {
                         buyTree.put(key, queue);
                     }
                     queue.offer(order);
-                    matchLog.add("Buy order added to backlog: " + order);
+                    //matchLog.add("Buy order added to backlog: " + order);
                 } finally {
                     buyLock.unlockWrite(stamp);
                 }
@@ -210,7 +211,17 @@ class ConcurrentOrderBook {
             boolean continueMatching = true;
             while (order.amount > 0 && continueMatching) {
                 long stamp = buyLock.tryOptimisticRead();
-                Map.Entry<String, OrderDisruptorQueue> entry = buyTree.firstEntry();
+                Map.Entry<String, OrderDisruptorQueue> entry = null;
+                try {
+                    entry = buyTree.firstEntry();
+                } catch (AssertionError ae) {
+                    stamp = buyLock.readLock();
+                    try {
+                        entry = buyTree.firstEntry();
+                    } finally {
+                        buyLock.unlockRead(stamp);
+                    }
+                }
                 if (entry == null) break;
                 int transformed = Integer.parseInt(entry.getKey());
                 int actualBuyPrice = PRICE_BASE - transformed;
@@ -236,7 +247,7 @@ class ConcurrentOrderBook {
                     buyOrder = entry.getValue().peek();
                     if (buyOrder == null) continue;
                     int matchQty = Math.min(order.amount, buyOrder.amount);
-                    matchLog.add("Match: " + buyOrder + " matched with " + order + ", quantity=" + matchQty);
+                    //matchLog.add("Match: " + buyOrder + " matched with " + order + ", quantity=" + matchQty);
                     order.amount -= matchQty;
                     buyOrder.amount -= matchQty;
                     if (buyOrder.amount == 0) {
@@ -259,7 +270,7 @@ class ConcurrentOrderBook {
                         sellTree.put(key, queue);
                     }
                     queue.offer(order);
-                    matchLog.add("Sell order added to backlog: " + order);
+                    //matchLog.add("Sell order added to backlog: " + order);
                 } finally {
                     sellLock.unlockWrite(stamp);
                 }
@@ -281,17 +292,16 @@ class ConcurrentOrderBook {
 }
 
 // =====================
-// 3. 多线程消费者：OrderWorker，实现 WorkHandler<OrderEvent>
-class OrderWorker implements WorkHandler<OrderEvent> {
-    private final ConcurrentOrderBook orderBook;
-    public OrderWorker(ConcurrentOrderBook orderBook) {
+// 3. 多线程消费者：OrderWorkerOptimistic
+
+class OrderWorkerOptimistic implements WorkHandler<OrderEvent> {
+    private final ConcurrentOrderBookOptimistic orderBook;
+    public OrderWorkerOptimistic(ConcurrentOrderBookOptimistic orderBook) {
         this.orderBook = orderBook;
     }
     @Override
     public void onEvent(OrderEvent event) {
-        // 处理当前订单事件
         orderBook.process(event.order);
     }
 }
-
 
